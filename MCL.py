@@ -5,6 +5,17 @@ import requests
 import tkinter as tk
 from tkinter import messagebox, ttk
 from urllib.request import urlretrieve
+import ctypes, sys
+import threading
+
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+
+
 
 
 def load_config():
@@ -79,6 +90,7 @@ def get_required_jdk(version):
 def check_java_installed(version):
     """检查所需的 Java 版本是否已安装"""
     global java_path
+    global installer
     try:
         # Ensure this returns exactly two values
         # Updated to match the new return values
@@ -87,10 +99,10 @@ def check_java_installed(version):
         messagebox.showerror("Error", str(e))
         return False
 
-    java_path = os.path.join(os.getcwd(), f"jdk{required_jdk}")
+    java_path = os.path.join(os.getcwd(), f"jdk{required_jdk}","bin")
 
     if os.path.exists(java_path):
-        java_executable = os.path.join(java_path, "bin", "java.exe")
+        java_executable = os.path.join(java_path, "java.exe")
         if os.path.exists(java_executable):
             try:
                 # Attempt to run the Java executable to check its version
@@ -109,6 +121,7 @@ def check_java_installed(version):
         else:
             messagebox.showerror(
                 "Error", f"Java executable not found at {java_executable}.")
+            install_java(installer, required_jdk)
             return False
     else:
         install_java(installer, required_jdk)
@@ -117,29 +130,19 @@ def check_java_installed(version):
 
 def install_java(installer, version):
     """安装所需的 Java 版本到指定目录"""
+    global install_dir
     installer_path = os.path.join(os.getcwd(), installer)
     install_dir = os.path.join(os.getcwd(), f"jdk{version}")
-
+    messagebox.showerror("java",f"java is not installed. we will install it.(not in {install_dir})")
+    messagebox.showinfo("java install","java installing...")
     if os.path.exists(installer_path):
         try:
-            # Create the installation directory if it doesn't exist
-            os.makedirs(install_dir, exist_ok=True)
-
-            # Create a batch file to run the installer with elevated permissions
-            batch_file_path = os.path.join(os.getcwd(), "install_java.bat")
-            with open(batch_file_path, "w+") as batch_file:
-                batch_file.write(
-                    f'start /wait "" "{installer_path}" /s /D="{install_dir}"\n')
-                # Delete the batch file after execution
-                batch_file.write(f'del "{batch_file_path}"\n')
-
-            # Run the batch file
-            subprocess.run(["start ", '"Window Title"',
-                           batch_file_path], check=True)
-            messagebox.showinfo(
-                "Installation", f"{installer} is being installed to {install_dir}.")
+            # Run the java installer
+            subprocess.run([installer,f"INSTALLDIR={install_dir}"], check=True)
+            messagebox.showinfo("install java","java installed!")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to install Java: {e}")
+            print(f"{e}")
     else:
         messagebox.showerror(
             "Error", f"Installer {installer} not found in the current directory.")
@@ -223,35 +226,73 @@ def on_launch():
 
     # 检查并下载 Minecraft jar 包和库文件
     if download_minecraft_jar(selected_version) and download_libraries(selected_version):
-        if check_java_installed(selected_version):  # Updated to pass selected version
-            launch_game({"id": selected_version}, username, access_token)
+        if check_java_installed(selected_version):  
+            threading.Thread(target=launch_game({"id": selected_version}, username, access_token)).start()# Updated to pass selected version
         else:
             messagebox.showwarning(
-                "Java Not Found", "Java is not installed. Please download it from:\nhttps://www.java.com/en/download/")
+                "Java Not Found", f"Java can't be installed. please install it or copy to {install_dir}")
 
 
 
 
 def launch_game(version_info, username=None, access_token=None):
     global java_path
-    """启动 Minecraft 游戏"""
+    """启动 Minecraft 游戏并写入 .bat 文件"""
+    
+    # Minecraft JAR 文件路径
     minecraft_path = os.path.join("versions", f"{version_info['id']}.jar")
+    
+    # 构建类路径
+    classpath = [minecraft_path]
+    
+    # 添加所有库文件到类路径
+    manifest = get_minecraft_version_manifest()
+    for version_info in manifest['versions']:
+        if version_info['id'] == version_info["id"]:
+            version_details_url = version_info['url']
+            version_details = requests.get(version_details_url).json()
+            libraries = version_details.get('libraries', [])
+            for library in libraries:
+                if 'downloads' in library and 'artifact' in library['downloads']:
+                    artifact = library['downloads']['artifact']
+                    library_path = os.path.join("libraries", artifact['path'])
+                    classpath.append(library_path)
+
+    # 将类路径转换为字符串
+    classpath_str = ";".join(classpath)
+
+    if access_token is not None:
+        offline = "" 
+        accesstoken = access_token
+    else:
+        offline = "--offline"
+        accesstoken = "null"
+
+    # 构建命令
     command = [
-        java_path,
-        "java.exe", "-jar", minecraft_path,
+        os.path.join(java_path, "java.exe"),
+        "-cp", classpath_str,
+        "net.minecraft.client.main.Main",
         "--username", username if username else "Player",
-        "--accessToken", access_token if access_token else "null",
+        "--accessToken", accesstoken,
         "--version", version_info["id"],
-        "--offline" if access_token is None else ""
+        offline
     ]
 
-    # 过滤掉空字符串
-    command = [arg for arg in command if arg]
+    # 写入到 .bat 文件
+    bat_file_path = "launch_minecraft.bat"
+    with open(bat_file_path, "w") as bat_file:
+        bat_file.write(f'@echo off\n')
+        bat_file.write(f'cd /d "{os.getcwd()}"\n')  # 切换到当前工作目录
+        bat_file.write(f'"{os.path.join(java_path, "java.exe")}" -cp "{classpath_str}" net.minecraft.client.main.Main --username "{username if username else "Player"}" --accessToken "{accesstoken}" --version "{version_info["id"]}" {offline}\n')
+        bat_file.write(f'pause\n')  # 暂停以查看输出
 
-    try:
-        subprocess.Popen(command)
-    except Exception as e:
-        messagebox.showerror("Error", str(e))
+    print(f"Batch file created: {bat_file_path}")
+
+    # 可选：直接运行 .bat 文件
+    os.startfile(bat_file_path)
+
+
 
 
 def on_launch():
@@ -315,6 +356,9 @@ version_combobox.current(0)  # 默认选择第一个版本
 launch_button = tk.Button(root, text="Launch", command=on_launch)
 launch_button.pack()
 
+if is_admin():
+    # 启动 GUI
+    root.mainloop()
+else:
+    subprocess.call(["startonadmin.bat"])
 
-# 启动 GUI
-root.mainloop()
