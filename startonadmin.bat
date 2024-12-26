@@ -1,5 +1,4 @@
 @echo off
-%1 mshta vbscript:CreateObject("Shell.Application").ShellExecute("cmd.exe","/c %~s0 ::","","runas",1)(window.close)&&exit
+%1 mshta vbscript:CreateObject("Shell.Application").ShellExecute("cmd.exe","/k %~s0 ::","","runas",1)(window.close)&&exit
 cd /d "%~dp0"
- 
-"D:\xiaomo\python.exe" "D:\xiaomo\smaller-minecraft-launcher\MCL.py"
+mcl.exe
